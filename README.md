@@ -25,6 +25,7 @@ mini-projects/
 
 ## Projets inclus
 
+- Docker : Conteneurisation avec des applications Docker
 - GitLab CI : pipeline CI/CD pour construire, tester, publier et déployer une image Docker
 - Jenkins : automatisation de build et de déploiement via des pipelines
 - Ansible : gestion de configuration et déploiement automatisé
