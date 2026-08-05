@@ -14,6 +14,7 @@ variables:
   HOST_PORT: 80
   CONTAINER_PORT: 80
   SERVER_USERNAME: 'ubuntu'
+  SLACK_WEBHOOK_URL: $SLACK_WEBHOOK_URL
 
 # Étape de build : construction de l'image Docker et sauvegarde de l'archive
 build:
@@ -22,9 +23,13 @@ build:
   services:
     - name: docker:dind
       alias: docker
+  before_script:
+    - apk add --no-cache curl
   script:
     - docker build --no-cache -t $IMAGE_NAME:$IMAGE_TAG .
     - docker save -o mini-projet-gitlab-ci.tar $IMAGE_NAME:$IMAGE_TAG
+    - >
+     curl -X POST -H 'Content-type: application/json' --data '{"text":"Build stage completed successfully"}' $SLACK_WEBHOOK_URL
   artifacts:
     paths:
       - mini-projet-gitlab-ci.tar
@@ -38,7 +43,9 @@ build:
     - docker load -i mini-projet-gitlab-ci.tar
     - docker run --rm -dp $HOST_PORT:$CONTAINER_PORT --name $IMAGE_NAME $IMAGE_NAME:$IMAGE_TAG
     - sleep 5
-    - curl -f http://docker | grep -i 200
+    - curl -f -o /dev/null http://docker
+    - >
+     curl -X POST -H 'Content-type: application/json' --data '{"text":"Test stage completed successfully"}' $SLACK_WEBHOOK_URL
 
 # Job de test qui réutilise le modèle ci-dessus
 test:
@@ -52,11 +59,15 @@ test:
 # Modèle réutilisable pour la publication de l'image sur Docker Hub
 .release_image: &release_image
   stage: release
+  before_script:
+    - apk add --no-cache curl
   script:
     - docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
     - docker load -i mini-projet-gitlab-ci.tar
     - docker tag $IMAGE_NAME:$IMAGE_TAG $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG
     - docker push $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG
+    - >
+     curl -X POST -H 'Content-type: application/json' --data '{"text":"Release stage completed successfully"}' $SLACK_WEBHOOK_URL
 
 # Job de release qui publie l'image Docker
 release:
@@ -71,6 +82,7 @@ release:
 .deploy_app: &deploy_app
   stage: deploy
   before_script:
+    - apk add --no-cache curl
     - apk add --no-cache openssh
     - eval $(ssh-agent -s)
     - echo "$SSH_PRIVATE_KEY" | base64 -d > /tmp/id_rsa
@@ -79,30 +91,49 @@ release:
     - mkdir -p ~/.ssh
     - chmod 700 ~/.ssh
     - echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+    - >
+     curl -X POST -H 'Content-type: application/json' --data '{"text":"Deploy stage completed successfully"}' $SLACK_WEBHOOK_URL
   script:
     - ssh -o StrictHostKeyChecking=no -i /tmp/id_rsa $SERVER_USERNAME@$SERVER_IP "docker pull $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG"
-    - ssh -o StrictHostKeyChecking=no -i /tmp/id_rsa $SERVER_USERNAME@$SERVER_IP "docker run --rm -dp $HOST_PORT:$CONTAINER_PORT --name $IMAGE_NAME $IMAGE_NAME:$IMAGE_TAG"
+    - ssh -o StrictHostKeyChecking=no -i /tmp/id_rsa $SERVER_USERNAME@$SERVER_IP "docker stop $IMAGE_NAME || true && docker rm $IMAGE_NAME || true"
+    - ssh -o StrictHostKeyChecking=no -i /tmp/id_rsa $SERVER_USERNAME@$SERVER_IP "docker run -d -p $HOST_PORT:$CONTAINER_PORT --name $IMAGE_NAME $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG"
 
 # Déploiement sur l'environnement de review
 deploy review:
   stage: deploy
+  variables:
+    SERVER_IP: '50.17.132.214'
   image: alpine
   <<: *deploy_app
   environment:
     name: Review/$CI_COMMIT_REF_NAME
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "review"'
+      when: always
 
 # Déploiement sur l'environnement staging
 Deploy Staging:
   stage: deploy
+  variables:
+    SERVER_IP: '3.228.218.55'
   image: alpine
   <<: *deploy_app
   environment:
     name: Staging
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "staging"'
 
 # Déploiement sur l'environnement production
 Deploy Production:
   stage: deploy
+  variables:
+    SERVER_IP: '100.54.20.69'
   image: alpine
   <<: *deploy_app
   environment:
     name: Production
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "prod"'
+      when: manual
+    - if: '$CI_MERGE_REQUEST_ID'
+      when: always
